@@ -1,0 +1,11 @@
+services:
+  watermark-remover:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: watermark-remover
+    ports:
+      - "8091:8091"
+    restart: unless-stopped
+    volumes:
+      - ./cache:/app/cache
