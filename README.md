@@ -10,15 +10,17 @@
 - Docker (для контейнерного запуска)
 
 ## Пример запроса после запуска:
-```curl -X POST http://localhost:8091/remove \
+```
+curl -X POST http://localhost:8091/remove \
   -F "image=https://example.com/input.jpg" \
   -F "wotemark=https://example.com/old1.png,https://example.com/old2.png" \
   -F "to-wotemark=https://example.com/new.png"
-  ```
+```
 
 - В параметр wotemark мы можем через запятую передать несколько шаблонов
 - В ответ мы получим обработанную картинку с заголовками Content-Type и Content-Disposition или JSON типа:
-```{ 
+```
+{ 
     "error": "message.." 
 }
 ```
