@@ -1,33 +1,20 @@
 from flask import Flask, request, send_file, jsonify
-from remover import process
+from remover import find_watermark, process  # теперь поддерживает SVG
 from io import BytesIO
 import requests
 import os
 import hashlib
+import cv2
+import numpy as np
 
 app = Flask(__name__)
 
-CACHE_DIR = "cache"
-os.makedirs(CACHE_DIR, exist_ok=True)
-
-def url_to_cache_path(url):
-    """Преобразует URL в путь кэш-файла по SHA256"""
-    h = hashlib.sha256(url.encode()).hexdigest()
-    return os.path.join(CACHE_DIR, f"{h}.bin")
-
-def download_or_cache(url):
-    """Скачиваем файл с кэшированием на диск"""
-    cache_path = url_to_cache_path(url)
-    if os.path.exists(cache_path):
-        with open(cache_path, "rb") as f:
-            return f.read()
+def download(url):
+    """Скачиваем файл БЕЗ кэширования"""
     try:
         r = requests.get(url, timeout=15)
         r.raise_for_status()
-        data = r.content
-        with open(cache_path, "wb") as f:
-            f.write(data)
-        return data
+        return r.content
     except Exception as e:
         print(f"Error downloading {url}: {e}")
         return None
@@ -38,7 +25,7 @@ def remove():
     img_url = request.form.get("image")
     if not img_url:
         return {"error": "image URL is required"}, 400
-    image_bytes = download_or_cache(img_url)
+    image_bytes = download(img_url)
     if not image_bytes:
         return {"error": "cannot download image"}, 400
 
@@ -51,25 +38,30 @@ def remove():
     for url in wm_urls.split(","):
         url = url.strip()
         if url:
-            data = download_or_cache(url)
+            data = download(url)
             if not data:
                 return {"error": f"cannot download wotemark: {url}"}, 400
             templates.append(data)
 
-    # TO-WOTEMARK — обязательный
-    new_wm_url = request.form.get("to-wotemark")
-    if not new_wm_url:
-        return {"error": "to-wotemark URL required"}, 400
+    # TO-WOTEMARK — обязательный, может быть несколько SVG через запятую
+    new_wm_urls = request.form.get("to-wotemark")
+    if not new_wm_urls:
+        return {"error": "to-wotemark URL(s) required"}, 400
 
-    new_wm_bytes = download_or_cache(new_wm_url)
-    if not new_wm_bytes:
-        return {"error": "cannot download to-wotemark"}, 400
+    svg_watermarks = []
+    for url in new_wm_urls.split(","):
+        url = url.strip()
+        if url:
+            data = download(url)
+            if not data:
+                return {"error": f"cannot download to-wotemark: {url}"}, 400
+            svg_watermarks.append(data)
 
-    # PROCESS
+    # PROCESS — теперь принимает список SVG
     output_bytes, fmt, width, height = process(
         image_bytes=image_bytes,
         templates=templates,
-        new_watermark=new_wm_bytes
+        svg_watermarks=svg_watermarks
     )
 
     return send_file(
@@ -78,6 +70,58 @@ def remove():
         as_attachment=True,
         download_name=f"output.{fmt}"
     )
+
+@app.post("/size")
+def watermark_size():
+    # Получаем URL исходного изображения
+    img_url = request.form.get("image")
+    if not img_url:
+        return {"error": "image URL is required"}, 400
+
+    image_bytes = download(img_url)
+    if not image_bytes:
+        return {"error": "cannot download image"}, 400
+
+    # Получаем URL шаблона водяного знака
+    tmpl_urls = request.form.get("template")
+    if not tmpl_urls:
+        return {"error": "template URL(s) required"}, 400
+
+    templates = []
+    for url in tmpl_urls.split(","):
+        url = url.strip()
+        if url:
+            data = download(url)
+            if not data:
+                return {"error": f"cannot download template: {url}"}, 400
+            templates.append(data)
+
+    # Декодируем изображение
+    image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        return {"error": "failed to decode image"}, 400
+
+    results = []
+    for t_bytes in templates:
+        tmpl = cv2.imdecode(np.frombuffer(t_bytes, np.uint8), cv2.IMREAD_UNCHANGED)
+        if tmpl is None:
+            continue
+
+        bbox = find_watermark(image, tmpl)
+        if bbox:
+            x, y, w, h, angle = bbox
+            results.append({
+                "x": x,
+                "y": y,
+                "width": w,
+                "height": h,
+                "angle": angle
+            })
+
+    if not results:
+        return {"error": "watermark not found"}, 404
+
+    return jsonify(results)
 
 if __name__ == "__main__":
     from waitress import serve

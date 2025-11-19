@@ -7,5 +7,3 @@ services:
     ports:
       - "8091:8091"
     restart: unless-stopped
-    volumes:
-      - ./cache:/app/cache
